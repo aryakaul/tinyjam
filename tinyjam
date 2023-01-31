@@ -1,0 +1,75 @@
+#!/bin/bash
+set -e
+
+usage() {
+    echo "
+    Jam to tiny desks with tinyjam v1.0.0!
+        -l,--list   path to a file where every line is the name of an artist 
+                    who appeared on tiny desk. if they did multiple shows
+                    adding the year they performed can specify this.
+        -o,--output path to an output directory to download video files to
+        -c,--color  flag to display videos in color
+        -h,--help   display this help message
+    "
+}
+
+log() {
+  lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+  printf '%b%s %b%s%b %s\n' "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    printf 'error: %s.\n' "$1" >&2
+    exit 1
+}
+
+dl_vids() {
+    while read -r tds; do
+        log "attempting to download $tds"
+        yt-dlp ytsearch1:"npr tiny desk $tds" -o "$OUTPUT/%(fulltitle)s.%(ext)s" --restrict-filenames
+    done<$JAMLIST
+}
+
+play_vids() {
+    if [ -z $COLOR ]; then
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=-100 --contrast=-10 --gamma=7 
+    else
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=40 --contrast=-10 --gamma=7 
+    fi
+}
+
+main() {
+    OUTPUT="./jamsesh"
+    JAMLIST=""
+    COLOR=""
+	for i in "$@"; do
+	case $i in
+		-l|--list)
+		JAMLIST="$2"
+        shift
+		shift
+        ;;
+		-o|--output)
+		OUTPUT="$2"
+		shift
+        shift
+		;;
+		-c|--color)
+		COLOR="Y"
+        shift
+		;;
+		-h|--help)
+        usage
+        exit
+		;;
+        *)    
+		;;
+	esac
+	done
+    log "output folder" "$OUTPUT" 
+    [ -z "$JAMLIST" ] && die "jamlist doesn't exist"
+    dl_vids
+    play_vids
+}
+
+main "$@"
