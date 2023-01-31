@@ -32,9 +32,9 @@ dl_vids() {
 
 play_vids() {
     if [ -z $COLOR ]; then
-        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=-100 --contrast=-10 --gamma=7 
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=-100 --contrast=-15 --geometry=80% --video-zoom=-0.2
     else
-        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=40 --contrast=-10 --gamma=7 
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=20 --contrast=15 --geometry=80% --video-zoom=-0.2
     fi
 }
 
