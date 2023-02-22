@@ -4,18 +4,23 @@ set -e
 usage() {
     echo "
     Jam to tiny desks with tinyjam v0.1.2!
-        -l,--list   path to a file where every line is the name of an artist 
-                    who appeared on tiny desk. if they did multiple shows
-                    adding the year they performed can specify this.
-        -o,--output path to an output directory to download video files to
-        -f,--force  if output directory exists + contains same # of elements as
-                    the number of lines in list then nuke contents and
-                    download videos again. default behavior is to assume all
-                    files are already downloaded and play them
-        -c,--color  flag to display videos in color
-        -h,--help   display this help message
+        -l,--list       path to a file where every line is the name of an artist 
+                        who appeared on tiny desk. if they did multiple shows
+                        adding the year they performed can specify this.
+        -o,--output     path to an output directory to download video files to,
+                        default is './jamsesh'
+        -n,--nodownload do not download video files, instead stream directly 
+                        from youtube
+        -f,--force      if output directory exists + contains same # of elements as
+                        the number of lines in list then nuke contents and
+                        download videos again. default behavior is to assume all
+                        files are already downloaded and play them
+        -c,--color      flag to display videos in color
+        -h,--help       display this help message
     "
 }
+
+standard_ops="--contrast=-15 --geometry=80% --video-zoom=-0.25"
 
 log() {
   lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
@@ -25,6 +30,17 @@ log() {
 die() {
     printf 'error: %s.\n' "$1" >&2
     exit 1
+}
+
+play_vids() {
+    shuf $JAMLIST | while read -r tds; do
+        log "finding + attempting to play $tds"
+        if [ -z $COLOR ]; then
+            mpv ytdl://ytsearch1:"npr tiny desk $tds" --saturation=-100 $standard_ops 
+        else
+            mpv ytdl://ytsearch1:"npr tiny desk $tds" --saturation=20 $standard_ops 
+        fi
+    done
 }
 
 dl_vids() {
@@ -43,9 +59,9 @@ dl_vids() {
 
 play_dl_vids() {
     if [ -z $COLOR ]; then
-        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=-100 --contrast=-15 --geometry=80% --video-zoom=-0.2
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=-100 $standard_ops
     else
-        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=20 --contrast=15 --geometry=80% --video-zoom=-0.2
+        mpv $OUTPUT/* --loop-playlist --shuffle --saturation=20 $standard_ops
     fi
 }
 
@@ -54,6 +70,7 @@ main() {
     JAMLIST=""
     COLOR=""
     FORCE=""
+    NODOWNLOAD=""
 	for i in "$@"; do
 	case $i in
 		-l|--list)
@@ -64,6 +81,10 @@ main() {
 		-o|--output)
 		OUTPUT="$2"
 		shift
+        shift
+		;;
+		-n|--nodownload)
+		NODOWNLOAD="Y"
         shift
 		;;
 		-c|--color)
@@ -84,8 +105,12 @@ main() {
 	done
     log "output folder" "$OUTPUT" 
     [ -z "$JAMLIST" ] && die "jamlist doesn't exist"
-    dl_vids
-    play_dl_vids
+    if [ -z "$NODOWNLOAD" ]; then
+        dl_vids
+        play_dl_vids
+    else
+        play_vids
+    fi
 }
 
 main "$@"
