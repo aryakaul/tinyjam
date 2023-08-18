@@ -104,7 +104,7 @@ main() {
 	esac
 	done
     log "output folder" "$OUTPUT" 
-    [ -z "$JAMLIST" ] && die "jamlist doesn't exist"
+    [ -z "$JAMLIST" ] && die "jamlist doesn't exist! check the help message"
     if [ -z "$NODOWNLOAD" ]; then
         dl_vids
         play_dl_vids
