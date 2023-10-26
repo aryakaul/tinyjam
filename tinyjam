@@ -52,8 +52,9 @@ dl_vids() {
     else
         while read -r tds; do
             log "attempting to download $tds"
-            yt-dlp ytsearch1:"npr tiny desk $tds" -o "$OUTPUT/%(fulltitle)s.%(ext)s" --restrict-filenames
+            yt-dlp ytsearch1:"npr tiny desk $tds" -o "$OUTPUT/%(fulltitle)s.%(ext)s" --restrict-filenames &
         done<$JAMLIST
+        wait
     fi
 }
 
