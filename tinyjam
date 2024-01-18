@@ -47,6 +47,8 @@ dl_vids() {
     mkdir -p $OUTPUT
     num_elems=$(wc -l $JAMLIST | awk '{print $1}')
     num_files=$(ls $OUTPUT/* | wc -l)
+    #echo "$num_elems"
+    #echo "$num_files"
     if [ "$num_elems" -le  "$num_files" ] && [ -z $FORCE ]; then
         log "output directory already contains files. skipping download."
     else
