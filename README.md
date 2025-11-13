@@ -1,7 +1,10 @@
-<div align="center">
-  <h1>tinyjam</h1>
-  <p>Jam to NPR Tiny Desk concerts on repeat.</p>
-</div>
+<h1 align="center"> tinyjam </h1>
+<p align="center">
+    <a href="#readme">
+        <img alt="alicia queen keys" src="https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/assets/queen.png">
+    </a>
+</p>
+<p align="center"> 💃🏽- jam 2 tiny desks </p>
 
 ---
 
