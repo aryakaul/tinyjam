@@ -16,12 +16,25 @@ wget "https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated"
 tinyjam -l ./arya-curated -n
 ```
 
+### PyPI
+```
+pip install tinyjam
+# Ensure `mpv` and `yt-dlp` are installed on your system
+wget "https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated"
+tinyjam -l ./arya-curated -n
+```
+
 ### git
 Install `mpv` & `yt-dlp`. Then,
 ```
 git clone "https://github.com/aryakaul/tinyjam.git"
 cd tinyjam
 wget "https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated"
+# Optional Python port dependencies
+pip install loguru tqdm
+# Python edition perks: structured logging, smart search, regex-driven subtitle
+# downloads (manual subs only, discovered via `--list-subs`), and mpv auto-loads
+# those tracks when the audio language differs.
 ./tinyjam -l ./arya-curated -n
 ```
 
@@ -42,7 +55,10 @@ wget "https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated"
                         the number of lines in list then nuke contents and
                         download videos again. default behavior is to assume all
                         files are already downloaded and play them
+        -j,--jobs       number of parallel downloads to run (0 = auto / all cores)
+        -S,--subtitles  preferred subtitle language/regex (manual subs are
+                        downloaded only when the Tiny Desk audio is different;
+                        default: en)
         -c,--color      flag to display videos in color
         -h,--help       display this help message
 ```
-
