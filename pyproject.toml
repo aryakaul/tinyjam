@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinyjam"
+version = "1.0.0"
+description = "Jam to NPR Tiny Desk concerts with downloads and streaming"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Arya Kaul" }
+]
+keywords = ["npr", "tiny desk", "music", "yt-dlp", "mpv"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+dependencies = [
+  "loguru>=0.7",
+  "tqdm>=4.66",
+  "yt-dlp>=2025",
+]
+
+[project.urls]
+Homepage = "https://github.com/aryakaul/tinyjam"
+Repository = "https://github.com/aryakaul/tinyjam"
+
+[project.scripts]
+tinyjam = "tinyjam.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
