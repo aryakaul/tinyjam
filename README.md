@@ -47,6 +47,8 @@ tinyjam --help
     -l, --list        File with one artist per line (required)
     -o, --output      Download folder (default: ./jamsesh)
     -n, --nodownload  Stream directly via mpv/yt-dlp
+    -p, --playlist-order {shuffle|forward|reverse}
+                       Control playback order (default: shuffle)
     -f, --force       Re-download even if files exist
     -j, --jobs        Parallel downloads (0 = auto)
     -S, --subtitles   Preferred subtitle language / regex (default: en)
@@ -58,3 +60,7 @@ tinyjam --help
 Tinyjam keeps a download cache, retries through `yt-dlp`, and can fetch manual subtitles when a Tiny Desk isn’t in your preferred language. Use `--nodownload` to shuffle a curated list straight from YouTube, or let it fill `./jamsesh` and loop locally via mpv. Running `tinyjam` with zero flags defaults to streaming my curated list.
 
 Enjoy the desks ✨
+
+## Versioning
+
+Releases are logged in the `VERSION` file at the repo root. Update it whenever a new tinyjam version ships so future runs can trace their history.

@@ -1,0 +1,5 @@
+tinyjam version history
+=======================
+
+- 1.0.0 – initial Python package release (packaged CLI, Homebrew formula)
+- 1.1.0 – introduced -p/--playlist-order to honor jam list order (forward or reverse)
