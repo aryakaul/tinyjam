@@ -10,23 +10,22 @@
 
 ## Quick Start
 
-Pick an artist list (one name per line). A starter list lives at
-[`arya-curated`](https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated).
+Pick an artist list (one name per line). My list lives at [`arya-curated`](https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated).
+Launch `tinyjam` with no options to have it automatically grab that curated list
+and start streaming it (same as `tinyjam -l arya-curated -n`).
 
 ### macOS (Homebrew)
 ```bash
 brew tap aryakaul/formulae
 brew install tinyjam
-wget https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated
-tinyjam -l ./arya-curated -n  # stream without downloading
+tinyjam 
 ```
 
 ### Any platform (PyPI)
 ```bash
 pip install tinyjam
 # tinyjam expects `mpv` and `yt-dlp` on your PATH
-wget https://raw.githubusercontent.com/aryakaul/tinyjam/main/arya-curated
-tinyjam -l ./arya-curated
+tinyjam 
 ```
 
 ### From source
@@ -35,7 +34,7 @@ git clone https://github.com/aryakaul/tinyjam.git
 cd tinyjam
 pip install --upgrade pip build
 pip install -e .
-tinyjam -l ./arya-curated -n
+tinyjam -l ./arya-curated -o ~/videos/tinydesk
 ```
 
 ---
@@ -58,7 +57,7 @@ tinyjam --help
     -v, --verbose     Extra logging
 ```
 
-Tinyjam keeps a download cache, retries through `yt-dlp`, and can fetch manual subtitles when a Tiny Desk isn’t in your preferred language. Use `--nodownload` to shuffle a curated list straight from YouTube, or let it fill `./jamsesh` and loop locally via mpv. Want deterministic runs? Pass `--playlist-order forward` to honor the jam list top-to-bottom or `--playlist-order reverse` to flip it.
+Tinyjam keeps a download cache, retries through `yt-dlp`, and can fetch manual subtitles when a Tiny Desk isn’t in your preferred language. Use `--nodownload` to shuffle a curated list straight from YouTube, or let it fill `./jamsesh` and loop locally via mpv. Running `tinyjam` with zero flags defaults to streaming my curated list.
 
 Enjoy the desks ✨
 
