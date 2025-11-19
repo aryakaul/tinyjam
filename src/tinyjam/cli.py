@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 from tqdm import tqdm
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 YT_CHANNEL_ID = "UC4eYXhJI4-7wSWc8UNRwD4A"
 STANDARD_OPS: Sequence[str] = (
@@ -41,6 +44,10 @@ TITLE_SUFFIX_RE = re.compile(r"([:\-\|]\s*)?\(?tiny desk.*$", re.IGNORECASE)
 YEAR_RE = re.compile(r"(\d{4})")
 ENGLISH_PREFIXES = ("en", "eng")
 SUB_LINE_RE = re.compile(r"^([A-Za-z0-9][\w\.-]*)\s")
+PLAYLIST_ORDER_CHOICES = ("shuffle", "forward", "reverse")
+CURATED_JAMLIST_URL = (
+    "https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/arya-curated"
+)
 
 
 def configure_logging(verbose: bool) -> None:
@@ -156,6 +163,35 @@ def build_subtitle_args(target_language: str) -> List[str]:
         "--sub-format",
         "vtt",
     ]
+
+
+def fetch_curated_jamlist() -> Path:
+    try:
+        with urlopen(CURATED_JAMLIST_URL, timeout=30) as response:
+            payload = response.read()
+    except (HTTPError, URLError) as exc:
+        logger.error("failed to download curated jam list | {}", exc)
+        sys.exit(1)
+    except OSError as exc:
+        logger.error("network error loading curated jam list | {}", exc)
+        sys.exit(1)
+
+    if not payload:
+        logger.error("curated jam list download returned no data")
+        sys.exit(1)
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb", delete=False, prefix="tinyjam-curated-", suffix=".txt"
+        ) as handle:
+            handle.write(payload)
+            temp_path = Path(handle.name)
+    except OSError as exc:
+        logger.error("failed to persist curated jam list | {}", exc)
+        sys.exit(1)
+
+    logger.info("using curated jam list from {}", CURATED_JAMLIST_URL)
+    return temp_path
 
 
 @dataclass
@@ -758,7 +794,11 @@ class TinyJam:
         return 0
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> TinyJamContext:
+def parse_args(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    require_list: bool = True,
+) -> TinyJamContext:
     parser = argparse.ArgumentParser(
         description="Jam to tiny desks with tinyjam (Python edition)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -766,7 +806,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> TinyJamContext:
     parser.add_argument(
         "-l",
         "--list",
-        required=True,
+        required=require_list,
         type=Path,
         help="path to artist list file (one per line)",
     )
@@ -844,8 +884,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> TinyJamContext:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    ctx = parse_args(argv)
+    args_list = list(argv) if argv is not None else sys.argv[1:]
+    use_curated_default = len(args_list) == 0
+    ctx = parse_args(args_list, require_list=not use_curated_default)
     configure_logging(ctx.verbose)
+    if use_curated_default:
+        ctx.jamlist = fetch_curated_jamlist()
+        ctx.nodownload = True
+        logger.info("no options provided | defaulting to streaming mode")
     app = TinyJam(ctx)
     return app.run()
 
