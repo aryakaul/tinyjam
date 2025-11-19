@@ -41,6 +41,7 @@ TITLE_SUFFIX_RE = re.compile(r"([:\-\|]\s*)?\(?tiny desk.*$", re.IGNORECASE)
 YEAR_RE = re.compile(r"(\d{4})")
 ENGLISH_PREFIXES = ("en", "eng")
 SUB_LINE_RE = re.compile(r"^([A-Za-z0-9][\w\.-]*)\s")
+PLAYLIST_ORDER_CHOICES = ("shuffle", "forward", "reverse")
 
 
 def configure_logging(verbose: bool) -> None:
@@ -169,6 +170,7 @@ class TinyJamContext:
     verbose: bool
     jobs: int
     subtitle_lang: str
+    playlist_order: str
     playlist: List[str] = field(default_factory=list)
     pending_downloads: List[str] = field(default_factory=list)
     download_archive: Optional[Path] = None
@@ -415,6 +417,64 @@ class TinyJam:
 
         return best_entry
 
+    def _ordered_playlist(self, items: Sequence[str]) -> List[str]:
+        order = self.ctx.playlist_order
+        if order == "forward":
+            return list(items)
+        if order == "reverse":
+            return list(reversed(items))
+        shuffled = list(items)
+        random.shuffle(shuffled)
+        return shuffled
+
+    def _video_id_from_path(self, path: str) -> Optional[str]:
+        name = Path(path).name
+        match = re.search(r"_\[([A-Za-z0-9_-]+)\]_\(", name)
+        if match:
+            return match.group(1)
+        return None
+
+    def _ordered_download_files(self, files: List[str]) -> List[str]:
+        order = self.ctx.playlist_order
+        if order == "shuffle":
+            return files
+
+        playlist = self.ctx.playlist
+        if not playlist:
+            return files if order == "forward" else list(reversed(files))
+
+        file_by_id: Dict[str, str] = {}
+        for path in files:
+            video_id = self._video_id_from_path(path)
+            if video_id:
+                file_by_id[video_id] = path
+
+        if not file_by_id:
+            return files if order == "forward" else list(reversed(files))
+
+        ordered: List[str] = []
+        referenced: Set[str] = set()
+        iterator: Iterable[str] = playlist if order == "forward" else reversed(playlist)
+
+        for artist in iterator:
+            video_id = self.ctx.cached_queries.get(artist)
+            if not video_id:
+                continue
+            file_path = file_by_id.get(video_id)
+            if not file_path:
+                continue
+            ordered.append(file_path)
+            referenced.add(file_path)
+
+        if not ordered:
+            return files if order == "forward" else list(reversed(files))
+
+        for path in files:
+            if path not in referenced:
+                ordered.append(path)
+
+        return ordered
+
     def select_video(self, artist: str) -> Optional[VideoSelection]:
         query = artist.strip()
         search_expr = f"ytsearch15:npr tiny desk {query}"
@@ -646,8 +706,7 @@ class TinyJam:
             logger.info("playlist empty | nothing to play")
             return
 
-        playlist = self.ctx.playlist[:]
-        random.shuffle(playlist)
+        playlist = self._ordered_playlist(self.ctx.playlist)
 
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
         sub_flags = [
@@ -685,6 +744,9 @@ class TinyJam:
             logger.info("playback skipped | no files found in {}", self.ctx.output)
             return
 
+        ordered_files = self._ordered_download_files(files)
+        shuffle_flag = ["--shuffle"] if self.ctx.playlist_order == "shuffle" else []
+
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
         sub_flags = [
             "--sub-auto=fuzzy",
@@ -696,8 +758,8 @@ class TinyJam:
             *color_flag,
             *STANDARD_OPS,
             "--loop-playlist",
-            "--shuffle",
-            *files,
+            *shuffle_flag,
+            *ordered_files,
         ]
 
         if self.ctx.dry_run:
@@ -784,6 +846,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> TinyJamContext:
         help="stream directly from YouTube instead of downloading",
     )
     parser.add_argument(
+        "-p",
+        "--playlist-order",
+        choices=PLAYLIST_ORDER_CHOICES,
+        default="shuffle",
+        help=(
+            "playback order: shuffle (default), jam list order (forward), "
+            "or reverse jam list order"
+        ),
+    )
+    parser.add_argument(
         "-f",
         "--force",
         action="store_true",
@@ -839,6 +911,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> TinyJamContext:
         verbose=args.verbose,
         jobs=args.jobs,
         subtitle_lang=args.subtitles,
+        playlist_order=args.playlist_order,
     )
     return ctx
 
