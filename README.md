@@ -58,6 +58,7 @@ tinyjam --help
 ```
 
 Tinyjam keeps a download cache, retries through `yt-dlp`, and can fetch manual subtitles when a Tiny Desk isn’t in your preferred language. Use `--nodownload` to shuffle a curated list straight from YouTube, or let it fill `./jamsesh` and loop locally via mpv. Running `tinyjam` with zero flags defaults to streaming my curated list.
+Local playback now filters to the artists in your jam list, ignoring stray videos in the output folder.
 
 Enjoy the desks ✨
 

@@ -469,14 +469,10 @@ class TinyJam:
             return match.group(1)
         return None
 
-    def _ordered_download_files(self, files: List[str]) -> List[str]:
-        order = self.ctx.playlist_order
-        if order == "shuffle":
-            return files
-
+    def _ordered_download_files(self, files: List[str]) -> Tuple[List[str], int, int]:
         playlist = self.ctx.playlist
-        if not playlist:
-            return files if order == "forward" else list(reversed(files))
+        expected = len(playlist)
+        order = self.ctx.playlist_order
 
         file_by_id: Dict[str, str] = {}
         for path in files:
@@ -484,31 +480,29 @@ class TinyJam:
             if video_id:
                 file_by_id[video_id] = path
 
-        if not file_by_id:
-            return files if order == "forward" else list(reversed(files))
-
-        ordered: List[str] = []
+        matched: List[str] = []
         referenced: Set[str] = set()
-        iterator: Iterable[str] = playlist if order == "forward" else reversed(playlist)
 
-        for artist in iterator:
-            video_id = self.ctx.cached_queries.get(artist)
-            if not video_id:
-                continue
-            file_path = file_by_id.get(video_id)
-            if not file_path:
-                continue
-            ordered.append(file_path)
-            referenced.add(file_path)
+        if playlist and file_by_id:
+            iterator: Iterable[str] = (
+                playlist if order != "reverse" else reversed(playlist)
+            )
+            for artist in iterator:
+                video_id = self.ctx.cached_queries.get(artist)
+                if not video_id:
+                    continue
+                file_path = file_by_id.get(video_id)
+                if not file_path or file_path in referenced:
+                    continue
+                matched.append(file_path)
+                referenced.add(file_path)
 
-        if not ordered:
-            return files if order == "forward" else list(reversed(files))
+            if matched:
+                return matched, len(matched), expected
 
-        for path in files:
-            if path not in referenced:
-                ordered.append(path)
-
-        return ordered
+        if order == "reverse":
+            return list(reversed(files)), len(matched), expected
+        return files, len(matched), expected
 
     def select_video(self, artist: str) -> Optional[VideoSelection]:
         query = artist.strip()
@@ -779,7 +773,21 @@ class TinyJam:
             logger.info("playback skipped | no files found in {}", self.ctx.output)
             return
 
-        ordered_files = self._ordered_download_files(files)
+        ordered_files, matched, expected = self._ordered_download_files(files)
+        if expected > 0:
+            if matched == 0:
+                logger.info(
+                    "playlist filter | no downloaded files matched {} | playing all in {}",
+                    self.ctx.jamlist,
+                    self.ctx.output,
+                )
+            elif matched < expected:
+                logger.info(
+                    "playlist filter | playing {}/{} listed jams present in {}",
+                    matched,
+                    expected,
+                    self.ctx.output,
+                )
         shuffle_flag = ["--shuffle"] if self.ctx.playlist_order == "shuffle" else []
 
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
