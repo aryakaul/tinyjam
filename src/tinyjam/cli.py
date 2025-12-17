@@ -49,7 +49,7 @@ ENGLISH_PREFIXES = ("en", "eng")
 SUB_LINE_RE = re.compile(r"^([A-Za-z0-9][\w\.-]*)\s")
 PLAYLIST_ORDER_CHOICES = ("shuffle", "forward", "reverse")
 CURATED_JAMLIST_URL = (
-    "https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/arya-curated"
+    "https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/assets/aryapproved/masterlist"
 )
 
 
