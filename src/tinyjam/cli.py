@@ -29,6 +29,8 @@ from tqdm import tqdm
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+__version__ = "1.2.0"
+
 YT_CHANNEL_ID = "UC4eYXhJI4-7wSWc8UNRwD4A"
 STANDARD_OPS: Sequence[str] = (
     "--contrast=-15",
@@ -67,6 +69,31 @@ def require_cmd(cmd: str) -> None:
     if shutil.which(cmd) is None:
         logger.error("required command '{}' not found in PATH", cmd)
         sys.exit(1)
+
+
+def get_video_height(file_path: str) -> Optional[int]:
+    """Get video height using ffprobe. Returns None if unavailable."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=height",
+        "-of", "csv=p=0",
+        file_path,
+    ]
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return int(result.stdout.strip())
+        except ValueError:
+            pass
+    return None
 
 
 def trim_video_segment(
@@ -162,6 +189,27 @@ def extract_language(entry: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def extract_max_height(entry: Dict[str, Any]) -> Optional[int]:
+    """Extract the maximum available video height (resolution) from metadata."""
+    max_height = None
+
+    # Check direct height field
+    if "height" in entry and isinstance(entry["height"], int):
+        max_height = entry["height"]
+
+    # Check formats for maximum height
+    formats = entry.get("formats")
+    if isinstance(formats, list):
+        for fmt in formats:
+            if isinstance(fmt, dict):
+                height = fmt.get("height")
+                if isinstance(height, int):
+                    if max_height is None or height > max_height:
+                        max_height = height
+
+    return max_height
+
+
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
     if not lang:
         return None
@@ -254,6 +302,7 @@ class VideoSelection:
     url: str
     year: str
     language: Optional[str]
+    max_height: Optional[int] = None
 
 
 class TinyJam:
@@ -677,6 +726,7 @@ class TinyJam:
             url=f"https://www.youtube.com/watch?v={video_id}",
             year=extract_year(entry),
             language=extract_language(entry),
+            max_height=extract_max_height(entry),
         )
 
     def download_single(self, artist: str) -> bool:
@@ -723,6 +773,29 @@ class TinyJam:
         if not selection:
             self.record_failure(artist)
             return False
+
+        # Warn about low quality videos
+        if selection.max_height is not None:
+            if selection.max_height < 720:
+                logger.warning(
+                    "low quality video | {} | max resolution: {}p (below 720p)",
+                    artist,
+                    selection.max_height,
+                )
+            elif selection.max_height < 1080:
+                logger.debug(
+                    "video quality | {} | max resolution: {}p",
+                    artist,
+                    selection.max_height,
+                )
+            else:
+                logger.debug(
+                    "video quality | {} | max resolution: {}p",
+                    artist,
+                    selection.max_height,
+                )
+        else:
+            logger.debug("video quality | {} | resolution unknown", artist)
 
         logger.debug(
             "language detection | {} -> video: {} | preferred: {}",
@@ -897,6 +970,7 @@ class TinyJam:
         # Also build video_id -> file path for more reliable lookups
         artist_to_file: Dict[str, str] = {}
         video_id_to_file: Dict[str, str] = {}
+
         for file_path in files:
             video_id = self._video_id_from_path(file_path)
             if video_id:
@@ -944,6 +1018,7 @@ class TinyJam:
             logger.debug("created temp directory for segments | {}", temp_dir)
 
         # Second pass: build playback list
+        low_quality_count = 0
         for orig_idx, artist in playlist:
             # Look up file by video ID (most reliable method)
             video_id = self._get_cached_video_id(artist)
@@ -954,6 +1029,19 @@ class TinyJam:
             if not file_path:
                 logger.debug("skipping | {} | not downloaded", artist)
                 continue
+
+            # Check quality of this video (only for videos that will be played)
+            if not self.ctx.dry_run and shutil.which("ffprobe"):
+                height = get_video_height(file_path)
+                if height is not None and height < 720:
+                    file_name = Path(file_path).name
+                    low_quality_count += 1
+                    logger.warning(
+                        "low quality video in playlist | {} | {}p | file: {}",
+                        artist,
+                        height,
+                        file_name,
+                    )
 
             # Check if this playlist entry has a timestamp
             if orig_idx in self.ctx.timestamps:
@@ -983,6 +1071,13 @@ class TinyJam:
                         playback_files.append(file_path)
             else:
                 playback_files.append(file_path)
+
+        # Report low quality videos summary
+        if low_quality_count > 0:
+            logger.info(
+                "playlist contains {} low quality video(s) below 720p | delete and re-run to download higher quality",
+                low_quality_count,
+            )
 
         shuffle_flag = ["--shuffle"] if self.ctx.playlist_order == "shuffle" else []
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
@@ -1077,6 +1172,11 @@ def parse_args(
     parser = argparse.ArgumentParser(
         description="Jam to tiny desks with tinyjam (Python edition)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"tinyjam {__version__}",
     )
     parser.add_argument(
         "-l",

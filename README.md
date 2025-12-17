@@ -95,4 +95,4 @@ Enjoy the desks ✨
 
 ## Versioning
 
-Releases are logged in the `VERSION` file at the repo root. Update it whenever a new tinyjam version ships so future runs can trace their history.
+Releases are logged in `CHANGELOG.md` at the repo root. See the changelog for version history and release notes.
