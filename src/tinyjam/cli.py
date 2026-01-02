@@ -119,6 +119,35 @@ def trim_video_segment(
     return result.returncode == 0
 
 
+def extract_audio(
+    input_path: str, output_path: str, start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> bool:
+    """Extract audio from video to mp3 using ffmpeg with loudness normalization. Returns True on success."""
+    cmd = ["ffmpeg", "-y", "-i", input_path]
+
+    # Add timestamp trimming if specified
+    if start_time and end_time:
+        cmd.extend(["-ss", start_time, "-to", end_time])
+
+    # Extract audio with high quality mp3 and loudness normalization
+    # Using EBU R128 loudnorm filter with target -16 LUFS for consistent loudness
+    cmd.extend([
+        "-vn",  # No video
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # Loudness normalization
+        "-acodec", "libmp3lame",
+        "-q:a", "2",  # VBR quality (0=best, 9=worst, 2=~190kbps)
+        output_path,
+    ])
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def shlex_join(parts: Sequence[str]) -> str:
     """Join a command for display, preserving shell quoting."""
     try:
@@ -278,6 +307,8 @@ class TinyJamContext:
     jobs: int
     subtitle_lang: str
     playlist_order: str
+    quality_check: bool
+    audio_out: Optional[Path]
     playlist: List[str] = field(default_factory=list)
     pending_downloads: List[str] = field(default_factory=list)
     timestamps: Dict[int, Tuple[str, str]] = field(default_factory=dict)
@@ -775,27 +806,28 @@ class TinyJam:
             return False
 
         # Warn about low quality videos
-        if selection.max_height is not None:
-            if selection.max_height < 720:
-                logger.warning(
-                    "low quality video | {} | max resolution: {}p (below 720p)",
-                    artist,
-                    selection.max_height,
-                )
-            elif selection.max_height < 1080:
-                logger.debug(
-                    "video quality | {} | max resolution: {}p",
-                    artist,
-                    selection.max_height,
-                )
+        if self.ctx.quality_check:
+            if selection.max_height is not None:
+                if selection.max_height < 720:
+                    logger.warning(
+                        "low quality video | {} | max resolution: {}p (below 720p)",
+                        artist,
+                        selection.max_height,
+                    )
+                elif selection.max_height < 1080:
+                    logger.debug(
+                        "video quality | {} | max resolution: {}p",
+                        artist,
+                        selection.max_height,
+                    )
+                else:
+                    logger.debug(
+                        "video quality | {} | max resolution: {}p",
+                        artist,
+                        selection.max_height,
+                    )
             else:
-                logger.debug(
-                    "video quality | {} | max resolution: {}p",
-                    artist,
-                    selection.max_height,
-                )
-        else:
-            logger.debug("video quality | {} | resolution unknown", artist)
+                logger.debug("video quality | {} | resolution unknown", artist)
 
         logger.debug(
             "language detection | {} -> video: {} | preferred: {}",
@@ -1031,7 +1063,7 @@ class TinyJam:
                 continue
 
             # Check quality of this video (only for videos that will be played)
-            if not self.ctx.dry_run and shutil.which("ffprobe"):
+            if self.ctx.quality_check and not self.ctx.dry_run and shutil.which("ffprobe"):
                 height = get_video_height(file_path)
                 if height is not None and height < 720:
                     file_name = Path(file_path).name
@@ -1073,13 +1105,12 @@ class TinyJam:
                 playback_files.append(file_path)
 
         # Report low quality videos summary
-        if low_quality_count > 0:
+        if self.ctx.quality_check and low_quality_count > 0:
             logger.info(
                 "playlist contains {} low quality video(s) below 720p | delete and re-run to download higher quality",
                 low_quality_count,
             )
 
-        shuffle_flag = ["--shuffle"] if self.ctx.playlist_order == "shuffle" else []
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
         sub_flags = [
             "--sub-auto=fuzzy",
@@ -1091,7 +1122,6 @@ class TinyJam:
             *color_flag,
             *STANDARD_OPS,
             "--loop-playlist",
-            *shuffle_flag,
             *playback_files,
         ]
 
@@ -1110,6 +1140,111 @@ class TinyJam:
                 logger.debug("cleaned up temp directory | {}", temp_dir)
             except OSError as exc:
                 logger.warning("failed to cleanup temp directory | {} | {}", temp_dir, exc)
+
+    def extract_audio_playlist(self) -> None:
+        """Extract audio from downloaded videos to numbered mp3 files."""
+        if not self.ctx.audio_out:
+            return
+
+        audio_dir = self.ctx.audio_out
+
+        # Create output directory
+        if not self.ctx.dry_run:
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("audio output directory | {}", audio_dir)
+
+        # Check for downloaded videos
+        if not self.ctx.output.is_dir():
+            logger.error("no downloads found | cannot extract audio from {}", self.ctx.output)
+            sys.exit(1)
+
+        valid_exts = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".mpg", ".mpeg"}
+        files = sorted(
+            [str(path) for path in self.ctx.output.iterdir()
+             if path.is_file() and path.suffix.lower() in valid_exts],
+            key=lambda name: name.lower(),
+        )
+
+        if not files:
+            logger.error("no video files found | cannot extract audio from {}", self.ctx.output)
+            sys.exit(1)
+
+        # Build video_id -> file_path mapping
+        video_id_to_file: Dict[str, str] = {}
+        for file_path in files:
+            video_id = self._video_id_from_path(file_path)
+            if video_id:
+                video_id_to_file[video_id] = file_path
+
+        # Get ordered playlist with original indices
+        ordered_playlist = self._ordered_playlist_with_indices()
+
+        # Extract audio in playlist order
+        extraction_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for position, (orig_idx, artist) in enumerate(ordered_playlist, start=1):
+            # Look up video file by video ID
+            video_id = self._get_cached_video_id(artist)
+            file_path = None
+            if video_id:
+                file_path = video_id_to_file.get(video_id)
+
+            if not file_path:
+                logger.warning("skipping | {} | video not downloaded", artist)
+                skipped_count += 1
+                continue
+
+            # Build output filename with number prefix
+            sanitized_artist = sanitize_label(artist)
+            output_filename = f"{position:02d}-{sanitized_artist}.mp3"
+            output_path = str(audio_dir / output_filename)
+
+            # Check for timestamps
+            start_time, end_time = None, None
+            if orig_idx in self.ctx.timestamps:
+                start_time, end_time = self.ctx.timestamps[orig_idx]
+                logger.info(
+                    "extracting audio | {} | {} | {} - {}",
+                    output_filename,
+                    Path(file_path).name,
+                    start_time,
+                    end_time,
+                )
+            else:
+                logger.info("extracting audio | {} | {}", output_filename, Path(file_path).name)
+
+            if self.ctx.dry_run:
+                cmd_preview = ["ffmpeg", "-y", "-i", file_path]
+                if start_time and end_time:
+                    cmd_preview.extend(["-ss", start_time, "-to", end_time])
+                cmd_preview.extend(["-vn", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-acodec", "libmp3lame", "-q:a", "2", output_path])
+                logger.info("dry run | {}", shlex_join(cmd_preview))
+                extraction_count += 1
+                continue
+
+            # Extract audio
+            success = extract_audio(file_path, output_path, start_time, end_time)
+            if success:
+                extraction_count += 1
+            else:
+                logger.error("failed to extract audio | {}", artist)
+                failed_count += 1
+
+        # Summary
+        logger.info(
+            "audio extraction complete | {} extracted, {} skipped, {} failed",
+            extraction_count,
+            skipped_count,
+            failed_count,
+        )
+
+        if skipped_count > 0:
+            logger.warning(
+                "{} artist(s) skipped | download videos first or check jam list",
+                skipped_count,
+            )
 
     def summarize_failures(self) -> None:
         if self.ctx.download_errors <= 0:
@@ -1132,6 +1267,9 @@ class TinyJam:
         logger.info("output directory | {}", self.ctx.output)
 
         if self.ctx.nodownload:
+            if self.ctx.audio_out:
+                logger.error("cannot use --audio-out with --nodownload | audio extraction requires downloaded videos")
+                return 1
             if not self.ctx.dry_run:
                 require_cmd("mpv")
             self.play_stream()
@@ -1139,10 +1277,12 @@ class TinyJam:
 
         if not self.ctx.dry_run:
             require_cmd("yt-dlp")
-            require_cmd("mpv")
-            # Check for ffmpeg if timestamps are present
-            if self.ctx.timestamps:
+            # Check for ffmpeg if timestamps OR audio extraction
+            if self.ctx.timestamps or self.ctx.audio_out:
                 require_cmd("ffmpeg")
+            # Only require mpv if not extracting audio
+            if not self.ctx.audio_out:
+                require_cmd("mpv")
         else:
             logger.info("dry run | skipping dependency checks")
 
@@ -1157,7 +1297,12 @@ class TinyJam:
             self.run_downloads()
 
         self.summarize_failures()
-        self.play_downloads()
+
+        # Audio extraction OR playback (mutually exclusive)
+        if self.ctx.audio_out:
+            self.extract_audio_playlist()
+        else:
+            self.play_downloads()
 
         if self.ctx.download_errors > 0:
             return 1
@@ -1252,6 +1397,19 @@ def parse_args(
             "is in a different language)"
         ),
     )
+    parser.add_argument(
+        "-q",
+        "--quality-check",
+        action="store_true",
+        help="check video quality and warn about low-resolution files",
+    )
+    parser.add_argument(
+        "-a",
+        "--audio-out",
+        type=Path,
+        metavar="DIR",
+        help="extract audio to specified directory (skips video playback)",
+    )
     args = parser.parse_args(argv)
 
     ctx = TinyJamContext(
@@ -1265,6 +1423,8 @@ def parse_args(
         jobs=args.jobs,
         subtitle_lang=args.subtitles,
         playlist_order=args.playlist_order,
+        quality_check=args.quality_check,
+        audio_out=args.audio_out,
     )
     return ctx
 

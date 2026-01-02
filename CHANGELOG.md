@@ -11,11 +11,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--version` flag to display current version
 - Auto-detection to rebuild cache from existing downloaded files
 - Case-insensitive artist name matching for cache lookups
-- Quality warnings for low-resolution videos (below 720p) during both download and playback
-  - Checks quality when downloading new Tiny Desks
-  - Checks quality for cached videos in the current playlist (not all videos in directory)
+- `-q/--quality-check` flag for opt-in quality warnings
+  - Checks video resolution during download and playback
+  - Warns about low-resolution videos (below 720p)
   - Uses ffprobe to detect resolution efficiently
   - Provides actionable guidance: delete low-quality files and re-run to download higher quality
+  - Quality checks are now opt-in (previously always-on) to improve performance
+- `-a/--audio-out DIR` flag for audio extraction
+  - Extracts audio from downloaded videos to numbered mp3 files
+  - Files numbered based on playlist order (forward/reverse/shuffle): `01-Artist.mp3`, `02-Artist.mp3`, etc.
+  - Supports mixtape mode (extracts only timestamped segments when specified)
+  - Skips video playback when audio extraction is enabled
+  - Uses ffmpeg with high-quality VBR mp3 encoding (~190kbps)
+  - Automatic loudness normalization (EBU R128 standard, -16 LUFS target) ensures consistent volume across tracks
+  - Incompatible with `--nodownload` (requires downloaded videos)
 
 ### Changed
 - Local playback now filters to the jam list (ignores stray downloads)
@@ -24,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Logging now shows exact vs case-insensitive cache matches in verbose mode
 
 ### Fixed
+- Shuffle mode now shuffles playlist once and maintains that order across loops (no more back-to-back duplicates)
 - Playlist playback now finds files even when artist name casing differs between jam lists and cache
 - Streaming mode URL resolution for timestamped entries
 - Downloaded mode now creates separate trimmed files per playlist entry (supports duplicate artists with different timestamps)
