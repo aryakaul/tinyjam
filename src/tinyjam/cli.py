@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Python port of the tinyjam Bash script.
-
-Provides the same behaviour as the shell implementation while adding structured
-logging and a verbosity flag backed by Loguru.
+PLAY TINYDESKS IN A COOL WAY
 """
 
 from __future__ import annotations
@@ -31,12 +28,16 @@ from urllib.request import urlopen
 
 __version__ = "1.2.0"
 
+# NPR youtube channel id
 YT_CHANNEL_ID = "UC4eYXhJI4-7wSWc8UNRwD4A"
+
+# vibes
 STANDARD_OPS: Sequence[str] = (
     "--contrast=-15",
     "--geometry=80%",
     "--video-zoom=-0.25",
 )
+
 DEFAULT_OUTPUT = Path("./jamsesh")
 ARCHIVE_NAME = ".tinyjam_archive.txt"
 FAILURES_NAME = ".tinyjam_failures"
@@ -964,7 +965,7 @@ class TinyJam:
                         continue
                     video_url = selection.url
                 else:
-                    video_url = f"https://www.youtube.com/watch?v=<resolved-id>"
+                    video_url = "https://www.youtube.com/watch?v=<resolved-id>"
 
                 cmd.extend([f"--start={start_time}", f"--end={end_time}", video_url])
             else:
