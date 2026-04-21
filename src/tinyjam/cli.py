@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Python port of the tinyjam Bash script.
-
-Provides the same behaviour as the shell implementation while adding structured
-logging and a verbosity flag backed by Loguru.
+PLAY TINYDESKS IN A COOL WAY
 """
 
 from __future__ import annotations
@@ -29,12 +26,18 @@ from tqdm import tqdm
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+__version__ = "1.2.0"
+
+# NPR youtube channel id
 YT_CHANNEL_ID = "UC4eYXhJI4-7wSWc8UNRwD4A"
+
+# vibes
 STANDARD_OPS: Sequence[str] = (
     "--contrast=-15",
     "--geometry=80%",
     "--video-zoom=-0.25",
 )
+
 DEFAULT_OUTPUT = Path("./jamsesh")
 ARCHIVE_NAME = ".tinyjam_archive.txt"
 FAILURES_NAME = ".tinyjam_failures"
@@ -42,11 +45,12 @@ ARTIST_CACHE_NAME = ".tinyjam_artists.txt"
 INVALID_FILENAME_CHARS = re.compile(r"[\\/:*?\"<>|]+")
 TITLE_SUFFIX_RE = re.compile(r"([:\-\|]\s*)?\(?tiny desk.*$", re.IGNORECASE)
 YEAR_RE = re.compile(r"(\d{4})")
+TIMESTAMP_RE = re.compile(r"^(.+?)\s\((\d{2}:\d{2})-(\d{2}:\d{2})\)$")
 ENGLISH_PREFIXES = ("en", "eng")
 SUB_LINE_RE = re.compile(r"^([A-Za-z0-9][\w\.-]*)\s")
 PLAYLIST_ORDER_CHOICES = ("shuffle", "forward", "reverse")
 CURATED_JAMLIST_URL = (
-    "https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/arya-curated"
+    "https://raw.githubusercontent.com/aryakaul/tinyjam/refs/heads/main/assets/aryapproved/masterlist"
 )
 
 
@@ -66,6 +70,83 @@ def require_cmd(cmd: str) -> None:
     if shutil.which(cmd) is None:
         logger.error("required command '{}' not found in PATH", cmd)
         sys.exit(1)
+
+
+def get_video_height(file_path: str) -> Optional[int]:
+    """Get video height using ffprobe. Returns None if unavailable."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=height",
+        "-of", "csv=p=0",
+        file_path,
+    ]
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return int(result.stdout.strip())
+        except ValueError:
+            pass
+    return None
+
+
+def trim_video_segment(
+    input_path: str, start_time: str, end_time: str, output_path: str
+) -> bool:
+    """Use ffmpeg to extract a video segment. Returns True on success."""
+    cmd = [
+        "ffmpeg",
+        "-y",  # Overwrite output file
+        "-ss", start_time,
+        "-to", end_time,
+        "-i", input_path,
+        "-c", "copy",  # Copy streams without re-encoding (fast)
+        "-avoid_negative_ts", "make_zero",
+        output_path,
+    ]
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def extract_audio(
+    input_path: str, output_path: str, start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> bool:
+    """Extract audio from video to mp3 using ffmpeg with loudness normalization. Returns True on success."""
+    cmd = ["ffmpeg", "-y", "-i", input_path]
+
+    # Add timestamp trimming if specified
+    if start_time and end_time:
+        cmd.extend(["-ss", start_time, "-to", end_time])
+
+    # Extract audio with high quality mp3 and loudness normalization
+    # Using EBU R128 loudnorm filter with target -16 LUFS for consistent loudness
+    cmd.extend([
+        "-vn",  # No video
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # Loudness normalization
+        "-acodec", "libmp3lame",
+        "-q:a", "2",  # VBR quality (0=best, 9=worst, 2=~190kbps)
+        output_path,
+    ])
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def shlex_join(parts: Sequence[str]) -> str:
@@ -138,6 +219,27 @@ def extract_language(entry: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def extract_max_height(entry: Dict[str, Any]) -> Optional[int]:
+    """Extract the maximum available video height (resolution) from metadata."""
+    max_height = None
+
+    # Check direct height field
+    if "height" in entry and isinstance(entry["height"], int):
+        max_height = entry["height"]
+
+    # Check formats for maximum height
+    formats = entry.get("formats")
+    if isinstance(formats, list):
+        for fmt in formats:
+            if isinstance(fmt, dict):
+                height = fmt.get("height")
+                if isinstance(height, int):
+                    if max_height is None or height > max_height:
+                        max_height = height
+
+    return max_height
+
+
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
     if not lang:
         return None
@@ -206,8 +308,11 @@ class TinyJamContext:
     jobs: int
     subtitle_lang: str
     playlist_order: str
+    quality_check: bool
+    audio_out: Optional[Path]
     playlist: List[str] = field(default_factory=list)
     pending_downloads: List[str] = field(default_factory=list)
+    timestamps: Dict[int, Tuple[str, str]] = field(default_factory=dict)
     download_archive: Optional[Path] = None
     failure_log: Optional[Path] = None
     artist_cache: Optional[Path] = None
@@ -229,6 +334,7 @@ class VideoSelection:
     url: str
     year: str
     language: Optional[str]
+    max_height: Optional[int] = None
 
 
 class TinyJam:
@@ -260,7 +366,20 @@ class TinyJam:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
-                items.append(line)
+
+                # Check for timestamp pattern: "artist (MM:SS-MM:SS)"
+                match = TIMESTAMP_RE.match(line)
+                if match:
+                    artist = match.group(1).strip()
+                    start_time = match.group(2)
+                    end_time = match.group(3)
+                    # Store timestamp by playlist index (before appending)
+                    playlist_index = len(items)
+                    items.append(artist)
+                    self.ctx.timestamps[playlist_index] = (start_time, end_time)
+                    logger.debug("parsed timestamp | {} | index {} | {} - {}", artist, playlist_index, start_time, end_time)
+                else:
+                    items.append(line)
 
         if not items:
             logger.error("jam list '{}' is empty", self.ctx.jamlist)
@@ -287,19 +406,18 @@ class TinyJam:
 
         if self.ctx.force:
             logger.info(
-                "force mode enabled | clearing downloads in {}",
+                "force mode enabled | clearing cache files in {}",
                 self.ctx.output,
             )
             if archive_path.exists():
                 archive_path.unlink()
+                logger.debug("removed download archive")
             if artist_cache.exists():
                 artist_cache.unlink()
-            for item in self.ctx.output.iterdir():
-                if item.is_file():
-                    try:
-                        item.unlink()
-                    except OSError as exc:
-                        logger.warning("could not remove {}: {}", item, exc)
+                logger.debug("removed artist cache")
+            if failure_log.exists():
+                failure_log.unlink()
+                logger.debug("removed failure log")
 
         archive_path.touch(exist_ok=True)
         artist_cache.touch(exist_ok=True)
@@ -311,28 +429,51 @@ class TinyJam:
         cache_path = self.ctx.artist_cache
         self.ctx.cached_queries = {}
         self.ctx.cached_video_ids = set()
-        if cache_path is None or not cache_path.exists():
-            return
 
-        try:
-            lines = cache_path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            lines = []
+        # Load existing cache
+        if cache_path and cache_path.exists():
+            try:
+                lines = cache_path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                lines = []
 
-        for raw in lines:
-            line = raw.strip()
-            if not line:
-                continue
-            video_id = ""
-            query = line
-            if "\t" in line:
-                video_id, query = line.split("\t", 1)
-                video_id = video_id.strip()
-                query = query.strip()
-            if query:
-                self.ctx.cached_queries[query] = video_id
-            if video_id:
-                self.ctx.cached_video_ids.add(video_id)
+            for raw in lines:
+                line = raw.strip()
+                if not line:
+                    continue
+                video_id = ""
+                query = line
+                if "\t" in line:
+                    video_id, query = line.split("\t", 1)
+                    video_id = video_id.strip()
+                    query = query.strip()
+                if query:
+                    self.ctx.cached_queries[query] = video_id
+                if video_id:
+                    self.ctx.cached_video_ids.add(video_id)
+
+        # Scan for existing files not in cache and add them
+        if self.ctx.output.is_dir():
+            valid_exts = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".mpg", ".mpeg"}
+            for file_path in self.ctx.output.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in valid_exts:
+                    # Extract video ID from filename
+                    match = re.search(r"_\[([A-Za-z0-9_-]+)\]_\(", file_path.name)
+                    if match:
+                        video_id = match.group(1)
+                        # If this video ID isn't in cache, check if it matches any artist
+                        if video_id not in self.ctx.cached_video_ids:
+                            for artist in unique_artists:
+                                # Check if this might be the file for this artist
+                                # by doing a search to see if the video ID matches
+                                if artist not in self.ctx.cached_queries:
+                                    selection = self.select_video(artist)
+                                    if selection and selection.video_id == video_id:
+                                        logger.info("found existing download | {} | adding to cache", artist)
+                                        self.mark_downloaded(artist, video_id)
+                                        self.ctx.cached_queries[artist] = video_id
+                                        self.ctx.cached_video_ids.add(video_id)
+                                        break
 
         self.ctx.pending_downloads = [
             artist for artist in unique_artists if artist not in self.ctx.cached_queries
@@ -462,6 +603,18 @@ class TinyJam:
         random.shuffle(shuffled)
         return shuffled
 
+    def _ordered_playlist_with_indices(self) -> List[Tuple[int, str]]:
+        """Return ordered playlist as (original_index, artist) pairs."""
+        indexed = list(enumerate(self.ctx.playlist))
+        order = self.ctx.playlist_order
+        if order == "forward":
+            return indexed
+        if order == "reverse":
+            return list(reversed(indexed))
+        shuffled = indexed.copy()
+        random.shuffle(shuffled)
+        return shuffled
+
     def _video_id_from_path(self, path: str) -> Optional[str]:
         name = Path(path).name
         match = re.search(r"_\[([A-Za-z0-9_-]+)\]_\(", name)
@@ -469,14 +622,38 @@ class TinyJam:
             return match.group(1)
         return None
 
-    def _ordered_download_files(self, files: List[str]) -> List[str]:
-        order = self.ctx.playlist_order
-        if order == "shuffle":
-            return files
+    def _get_cached_video_id(self, artist: str) -> Optional[str]:
+        """Look up video ID for artist with case-insensitive fallback."""
+        # Try exact match first
+        if artist in self.ctx.cached_queries:
+            logger.debug("cache hit (exact) | {} -> {}", artist, self.ctx.cached_queries[artist])
+            return self.ctx.cached_queries[artist]
 
+        # Fall back to case-insensitive match
+        artist_lower = artist.lower()
+        for cached_artist, video_id in self.ctx.cached_queries.items():
+            if cached_artist.lower() == artist_lower:
+                logger.debug("cache hit (case-insensitive) | {} matched {} -> {}", artist, cached_artist, video_id)
+                return video_id
+
+        logger.debug("cache miss | {} not found", artist)
+        return None
+
+    def _artist_from_path(self, path: str) -> Optional[str]:
+        """Find artist name for a file path by matching video ID."""
+        video_id = self._video_id_from_path(path)
+        if not video_id:
+            return None
+        # Reverse lookup: find artist whose cached video ID matches
+        for artist, cached_id in self.ctx.cached_queries.items():
+            if cached_id == video_id:
+                return artist
+        return None
+
+    def _ordered_download_files(self, files: List[str]) -> Tuple[List[str], int, int]:
         playlist = self.ctx.playlist
-        if not playlist:
-            return files if order == "forward" else list(reversed(files))
+        expected = len(playlist)
+        order = self.ctx.playlist_order
 
         file_by_id: Dict[str, str] = {}
         for path in files:
@@ -484,31 +661,29 @@ class TinyJam:
             if video_id:
                 file_by_id[video_id] = path
 
-        if not file_by_id:
-            return files if order == "forward" else list(reversed(files))
-
-        ordered: List[str] = []
+        matched: List[str] = []
         referenced: Set[str] = set()
-        iterator: Iterable[str] = playlist if order == "forward" else reversed(playlist)
 
-        for artist in iterator:
-            video_id = self.ctx.cached_queries.get(artist)
-            if not video_id:
-                continue
-            file_path = file_by_id.get(video_id)
-            if not file_path:
-                continue
-            ordered.append(file_path)
-            referenced.add(file_path)
+        if playlist and file_by_id:
+            iterator: Iterable[str] = (
+                playlist if order != "reverse" else reversed(playlist)
+            )
+            for artist in iterator:
+                video_id = self._get_cached_video_id(artist)
+                if not video_id:
+                    continue
+                file_path = file_by_id.get(video_id)
+                if not file_path or file_path in referenced:
+                    continue
+                matched.append(file_path)
+                referenced.add(file_path)
 
-        if not ordered:
-            return files if order == "forward" else list(reversed(files))
+            if matched:
+                return matched, len(matched), expected
 
-        for path in files:
-            if path not in referenced:
-                ordered.append(path)
-
-        return ordered
+        if order == "reverse":
+            return list(reversed(files)), len(matched), expected
+        return files, len(matched), expected
 
     def select_video(self, artist: str) -> Optional[VideoSelection]:
         query = artist.strip()
@@ -583,6 +758,7 @@ class TinyJam:
             url=f"https://www.youtube.com/watch?v={video_id}",
             year=extract_year(entry),
             language=extract_language(entry),
+            max_height=extract_max_height(entry),
         )
 
     def download_single(self, artist: str) -> bool:
@@ -629,6 +805,30 @@ class TinyJam:
         if not selection:
             self.record_failure(artist)
             return False
+
+        # Warn about low quality videos
+        if self.ctx.quality_check:
+            if selection.max_height is not None:
+                if selection.max_height < 720:
+                    logger.warning(
+                        "low quality video | {} | max resolution: {}p (below 720p)",
+                        artist,
+                        selection.max_height,
+                    )
+                elif selection.max_height < 1080:
+                    logger.debug(
+                        "video quality | {} | max resolution: {}p",
+                        artist,
+                        selection.max_height,
+                    )
+                else:
+                    logger.debug(
+                        "video quality | {} | max resolution: {}p",
+                        artist,
+                        selection.max_height,
+                    )
+            else:
+                logger.debug("video quality | {} | resolution unknown", artist)
 
         logger.debug(
             "language detection | {} -> video: {} | preferred: {}",
@@ -741,7 +941,7 @@ class TinyJam:
             logger.info("playlist empty | nothing to play")
             return
 
-        playlist = self._ordered_playlist(self.ctx.playlist)
+        playlist = self._ordered_playlist_with_indices()
 
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
         sub_flags = [
@@ -750,10 +950,30 @@ class TinyJam:
         ]
         base_cmd = ["mpv", *sub_flags, *color_flag, *STANDARD_OPS]
 
-        for artist in playlist:
-            query = f"ytdl://ytsearch1:npr tiny desk {artist}"
-            cmd = base_cmd + [query]
-            logger.info("streaming | {}", artist)
+        for orig_idx, artist in playlist:
+            cmd = base_cmd.copy()
+
+            # Check if this original playlist position has a timestamp
+            if orig_idx in self.ctx.timestamps:
+                start_time, end_time = self.ctx.timestamps[orig_idx]
+                logger.info("streaming | {} | {} - {}", artist, start_time, end_time)
+
+                if not self.ctx.dry_run:
+                    selection = self.select_video(artist)
+                    if not selection:
+                        logger.warning("could not resolve video for timestamped entry | {}", artist)
+                        continue
+                    video_url = selection.url
+                else:
+                    video_url = "https://www.youtube.com/watch?v=<resolved-id>"
+
+                cmd.extend([f"--start={start_time}", f"--end={end_time}", video_url])
+            else:
+                # No timestamp: use ytdl search protocol for simplicity
+                query = f"ytdl://ytsearch1:npr tiny desk {artist}"
+                cmd.append(query)
+                logger.info("streaming | {}", artist)
+
             if self.ctx.dry_run:
                 logger.info("dry run | {}", shlex_join(cmd))
                 continue
@@ -779,8 +999,118 @@ class TinyJam:
             logger.info("playback skipped | no files found in {}", self.ctx.output)
             return
 
-        ordered_files = self._ordered_download_files(files)
-        shuffle_flag = ["--shuffle"] if self.ctx.playlist_order == "shuffle" else []
+        # Build a map of artist -> file path
+        # Also build video_id -> file path for more reliable lookups
+        artist_to_file: Dict[str, str] = {}
+        video_id_to_file: Dict[str, str] = {}
+
+        for file_path in files:
+            video_id = self._video_id_from_path(file_path)
+            if video_id:
+                video_id_to_file[video_id] = file_path
+            artist = self._artist_from_path(file_path)
+            if artist and artist not in artist_to_file:
+                artist_to_file[artist] = file_path
+
+        # Process playlist in order, creating trimmed segments as needed
+        playback_files = []
+        temp_dir = None
+        has_timestamps = bool(self.ctx.timestamps)
+        matched_count = 0
+
+        playlist = self._ordered_playlist_with_indices()
+
+        # First pass: check what files we'll actually play
+        for orig_idx, artist in playlist:
+            # Try to get video ID for this artist
+            video_id = self._get_cached_video_id(artist)
+            if video_id and video_id in video_id_to_file:
+                matched_count += 1
+
+        # Handle no matches case
+        if matched_count == 0:
+            logger.warning(
+                "no downloaded files matched jam list | use -n to stream or download videos first"
+            )
+            logger.info("skipping playback | no matching files in {}", self.ctx.output)
+            return
+
+        if matched_count < len(self.ctx.playlist):
+            missing_count = len(self.ctx.playlist) - matched_count
+            logger.info(
+                "playlist filter | found {}/{} jams | {} will be played, {} not downloaded",
+                matched_count,
+                len(self.ctx.playlist),
+                matched_count,
+                missing_count,
+            )
+
+        # Create temp directory only if we have timestamps AND matched files
+        if has_timestamps and not self.ctx.dry_run:
+            temp_dir = tempfile.mkdtemp(prefix="tinyjam-segments-")
+            logger.debug("created temp directory for segments | {}", temp_dir)
+
+        # Second pass: build playback list
+        low_quality_count = 0
+        for orig_idx, artist in playlist:
+            # Look up file by video ID (most reliable method)
+            video_id = self._get_cached_video_id(artist)
+            file_path = None
+            if video_id:
+                file_path = video_id_to_file.get(video_id)
+
+            if not file_path:
+                logger.debug("skipping | {} | not downloaded", artist)
+                continue
+
+            # Check quality of this video (only for videos that will be played)
+            if self.ctx.quality_check and not self.ctx.dry_run and shutil.which("ffprobe"):
+                height = get_video_height(file_path)
+                if height is not None and height < 720:
+                    file_name = Path(file_path).name
+                    low_quality_count += 1
+                    logger.warning(
+                        "low quality video in playlist | {} | {}p | file: {}",
+                        artist,
+                        height,
+                        file_name,
+                    )
+
+            # Check if this playlist entry has a timestamp
+            if orig_idx in self.ctx.timestamps:
+                start_time, end_time = self.ctx.timestamps[orig_idx]
+                logger.info("trimming segment | {} | {} - {}", Path(file_path).name, start_time, end_time)
+
+                if self.ctx.dry_run:
+                    trimmed_path = f"{temp_dir or '/tmp'}/trimmed_{orig_idx}_{Path(file_path).name}"
+                    logger.info(
+                        "dry run | {}",
+                        shlex_join([
+                            "ffmpeg", "-y", "-ss", start_time, "-to", end_time,
+                            "-i", file_path, "-c", "copy", "-avoid_negative_ts",
+                            "make_zero", trimmed_path
+                        ])
+                    )
+                    playback_files.append(trimmed_path)
+                else:
+                    # Create trimmed segment with unique name per index
+                    file_ext = Path(file_path).suffix
+                    trimmed_path = str(Path(temp_dir) / f"trimmed_{orig_idx}_{start_time.replace(':', '')}-{end_time.replace(':', '')}{file_ext}")
+
+                    if trim_video_segment(file_path, start_time, end_time, trimmed_path):
+                        playback_files.append(trimmed_path)
+                    else:
+                        logger.warning("failed to trim segment | {} | using full video", file_path)
+                        playback_files.append(file_path)
+            else:
+                playback_files.append(file_path)
+
+        # Report low quality videos summary
+        if self.ctx.quality_check and low_quality_count > 0:
+            logger.info(
+                "playlist contains {} low quality video(s) below 720p | delete and re-run to download higher quality",
+                low_quality_count,
+            )
 
         color_flag = ["--saturation=20"] if self.ctx.color else ["--saturation=-100"]
         sub_flags = [
@@ -793,8 +1123,7 @@ class TinyJam:
             *color_flag,
             *STANDARD_OPS,
             "--loop-playlist",
-            *shuffle_flag,
-            *ordered_files,
+            *playback_files,
         ]
 
         if self.ctx.dry_run:
@@ -804,6 +1133,119 @@ class TinyJam:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
             logger.warning("mpv exited with error | {}", self.ctx.output)
+
+        # Cleanup temp directory
+        if temp_dir and Path(temp_dir).exists():
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug("cleaned up temp directory | {}", temp_dir)
+            except OSError as exc:
+                logger.warning("failed to cleanup temp directory | {} | {}", temp_dir, exc)
+
+    def extract_audio_playlist(self) -> None:
+        """Extract audio from downloaded videos to numbered mp3 files."""
+        if not self.ctx.audio_out:
+            return
+
+        audio_dir = self.ctx.audio_out
+
+        # Create output directory
+        if not self.ctx.dry_run:
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("audio output directory | {}", audio_dir)
+
+        # Check for downloaded videos
+        if not self.ctx.output.is_dir():
+            logger.error("no downloads found | cannot extract audio from {}", self.ctx.output)
+            sys.exit(1)
+
+        valid_exts = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".mpg", ".mpeg"}
+        files = sorted(
+            [str(path) for path in self.ctx.output.iterdir()
+             if path.is_file() and path.suffix.lower() in valid_exts],
+            key=lambda name: name.lower(),
+        )
+
+        if not files:
+            logger.error("no video files found | cannot extract audio from {}", self.ctx.output)
+            sys.exit(1)
+
+        # Build video_id -> file_path mapping
+        video_id_to_file: Dict[str, str] = {}
+        for file_path in files:
+            video_id = self._video_id_from_path(file_path)
+            if video_id:
+                video_id_to_file[video_id] = file_path
+
+        # Get ordered playlist with original indices
+        ordered_playlist = self._ordered_playlist_with_indices()
+
+        # Extract audio in playlist order
+        extraction_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for position, (orig_idx, artist) in enumerate(ordered_playlist, start=1):
+            # Look up video file by video ID
+            video_id = self._get_cached_video_id(artist)
+            file_path = None
+            if video_id:
+                file_path = video_id_to_file.get(video_id)
+
+            if not file_path:
+                logger.warning("skipping | {} | video not downloaded", artist)
+                skipped_count += 1
+                continue
+
+            # Build output filename with number prefix
+            sanitized_artist = sanitize_label(artist)
+            output_filename = f"{position:02d}-{sanitized_artist}.mp3"
+            output_path = str(audio_dir / output_filename)
+
+            # Check for timestamps
+            start_time, end_time = None, None
+            if orig_idx in self.ctx.timestamps:
+                start_time, end_time = self.ctx.timestamps[orig_idx]
+                logger.info(
+                    "extracting audio | {} | {} | {} - {}",
+                    output_filename,
+                    Path(file_path).name,
+                    start_time,
+                    end_time,
+                )
+            else:
+                logger.info("extracting audio | {} | {}", output_filename, Path(file_path).name)
+
+            if self.ctx.dry_run:
+                cmd_preview = ["ffmpeg", "-y", "-i", file_path]
+                if start_time and end_time:
+                    cmd_preview.extend(["-ss", start_time, "-to", end_time])
+                cmd_preview.extend(["-vn", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-acodec", "libmp3lame", "-q:a", "2", output_path])
+                logger.info("dry run | {}", shlex_join(cmd_preview))
+                extraction_count += 1
+                continue
+
+            # Extract audio
+            success = extract_audio(file_path, output_path, start_time, end_time)
+            if success:
+                extraction_count += 1
+            else:
+                logger.error("failed to extract audio | {}", artist)
+                failed_count += 1
+
+        # Summary
+        logger.info(
+            "audio extraction complete | {} extracted, {} skipped, {} failed",
+            extraction_count,
+            skipped_count,
+            failed_count,
+        )
+
+        if skipped_count > 0:
+            logger.warning(
+                "{} artist(s) skipped | download videos first or check jam list",
+                skipped_count,
+            )
 
     def summarize_failures(self) -> None:
         if self.ctx.download_errors <= 0:
@@ -826,6 +1268,9 @@ class TinyJam:
         logger.info("output directory | {}", self.ctx.output)
 
         if self.ctx.nodownload:
+            if self.ctx.audio_out:
+                logger.error("cannot use --audio-out with --nodownload | audio extraction requires downloaded videos")
+                return 1
             if not self.ctx.dry_run:
                 require_cmd("mpv")
             self.play_stream()
@@ -833,7 +1278,12 @@ class TinyJam:
 
         if not self.ctx.dry_run:
             require_cmd("yt-dlp")
-            require_cmd("mpv")
+            # Check for ffmpeg if timestamps OR audio extraction
+            if self.ctx.timestamps or self.ctx.audio_out:
+                require_cmd("ffmpeg")
+            # Only require mpv if not extracting audio
+            if not self.ctx.audio_out:
+                require_cmd("mpv")
         else:
             logger.info("dry run | skipping dependency checks")
 
@@ -848,7 +1298,12 @@ class TinyJam:
             self.run_downloads()
 
         self.summarize_failures()
-        self.play_downloads()
+
+        # Audio extraction OR playback (mutually exclusive)
+        if self.ctx.audio_out:
+            self.extract_audio_playlist()
+        else:
+            self.play_downloads()
 
         if self.ctx.download_errors > 0:
             return 1
@@ -863,6 +1318,11 @@ def parse_args(
     parser = argparse.ArgumentParser(
         description="Jam to tiny desks with tinyjam (Python edition)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"tinyjam {__version__}",
     )
     parser.add_argument(
         "-l",
@@ -938,6 +1398,19 @@ def parse_args(
             "is in a different language)"
         ),
     )
+    parser.add_argument(
+        "-q",
+        "--quality-check",
+        action="store_true",
+        help="check video quality and warn about low-resolution files",
+    )
+    parser.add_argument(
+        "-a",
+        "--audio-out",
+        type=Path,
+        metavar="DIR",
+        help="extract audio to specified directory (skips video playback)",
+    )
     args = parser.parse_args(argv)
 
     ctx = TinyJamContext(
@@ -951,6 +1424,8 @@ def parse_args(
         jobs=args.jobs,
         subtitle_lang=args.subtitles,
         playlist_order=args.playlist_order,
+        quality_check=args.quality_check,
+        audio_out=args.audio_out,
     )
     return ctx
 

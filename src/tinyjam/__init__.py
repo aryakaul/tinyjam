@@ -5,4 +5,4 @@ from __future__ import annotations
 from .cli import main
 
 __all__ = ["main", "__version__"]
-__version__ = "1.0.0"
+__version__ = "1.2.0"
