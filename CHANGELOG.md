@@ -4,7 +4,9 @@ All notable changes to tinyjam will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.2.0] - Unreleased
+## [1.3.0] - Unreleased
+
+## [1.2.0] - 2026-04-21
 
 ### Added
 - Mixtape mode: specify video segments using `artist (MM:SS-MM:SS)` syntax in jam lists

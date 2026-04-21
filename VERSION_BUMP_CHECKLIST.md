@@ -3,9 +3,9 @@
 This document outlines all steps required to release a new version of tinyjam.
 
 ## Current State
-- Homebrew: v1.1.0 (aryakaul/formulae/tinyjam)
-- PyPI: v1.1.0
-- Next release: v1.2.0
+- Homebrew: v1.2.0 (aryakaul/formulae/tinyjam)
+- PyPI: v1.2.0
+- Next release: v1.3.0
 
 ## Pre-Release Checklist
 
