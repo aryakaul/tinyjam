@@ -25,10 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Uses ffmpeg with high-quality VBR mp3 encoding (~190kbps)
   - Automatic loudness normalization (EBU R128 standard, -16 LUFS target) ensures consistent volume across tracks
   - Incompatible with `--nodownload` (requires downloaded videos)
+- `ffmpeg` is now required when using timestamp features or `--audio-out`
 
 ### Changed
+- Default curated list URL updated to `assets/aryapproved/masterlist` (was `arya-curated`)
 - Local playback now filters to the jam list (ignores stray downloads)
-- `--force` flag no longer deletes video files (only clears cache)
+- `--force` flag now clears download archive, artist cache, and failure log (no longer deletes video files)
+- Shuffle order is now determined once in Python and passed to mpv as a fixed list, replacing mpv's `--shuffle` flag — prevents re-shuffling on each loop iteration
 - Improved logging clarity for cache hits and playlist filtering
 - Logging now shows exact vs case-insensitive cache matches in verbose mode
 
