@@ -35,6 +35,7 @@ We also have support for subtitle downloading, playlist creation, and cacheing! 
 
 ### macOS (Homebrew)
 ```bash
+brew trust aryakaul/formulae
 brew tap aryakaul/formulae
 brew install tinyjam
 tinyjam 
